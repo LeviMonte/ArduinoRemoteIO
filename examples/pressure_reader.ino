@@ -13,6 +13,7 @@
 #include <ModbusResponder.h>
 #include "constants.h"
 
+#define MODBUS_MAX_REGS 2 // CUSTOMIZE to match your NUM_HOLDING_REGS
 #define DEBUG_SERIAL 0
 #define USE_STATIC_IP 1
 #if USE_STATIC_IP
