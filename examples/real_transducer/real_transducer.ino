@@ -1,49 +1,54 @@
 /*
-Pressure Reader - JLab SRGS Cryogenics Project
+  real_transducer - the from-scratch reference behind ModbusResponder.
 
-Reads two 4-20mA current loop signals from 24V transducers:
-  channel 0 - static pressure transducer
-  channel 1 - differential pressure transducer
-Each loop drops across its own 250-ohm shunt; the ADC reads the
-shunt voltage and the result is served as current in centi-mA.
+  This sketch is the ORIGINAL, hand-rolled version of the JLab SRGS
+  cryogenics reader. It does NOT use the ModbusResponder library: instead
+  it handles the Modbus TCP framing and Read Holding Registers (FC03) reply
+  inline, in serveModbusRequest() below. The library was distilled from
+  exactly this code, so it's kept here as a reference for anyone who wants
+  to see what ModbusResponder::serve() does internally, or who needs to
+  customize the protocol handling beyond what the library exposes.
 
-Reads over Modbus TCP. ArduinoModbus library was replaced with
-a low level response manager, only needing Read Holding Registers
-on two consecutive registers. This change was made because libmodbus
-was costing ~700 bytes (out of 2048) of static RAM plus runtime heap allocations
-(~300 additional bytes) and ~11 KB of flash.
+  For everyday use, prefer the `example_transducer` sketch, which does the
+  same job using the library. See `BasicHoldingRegisters` for the minimal
+  API introduction.
 
-Levi Monte
-7/20/2026
+  Function: reads two 4-20mA current-loop signals from 24V transducers
+  (channel 0 = static pressure, channel 1 = differential pressure). Each
+  loop drops across its own 250-ohm shunt; the ADC reads the shunt voltage
+  and the result is served as current in centi-mA (hundredths of a mA).
+
+  All math is integer-only: AVR chips have no FPU, so floating point is
+  emulated and slow.
+
+  The inline responder replaced the ArduinoModbus library, which cost
+  ~700 bytes of static RAM (of 2048), ~300 bytes of runtime heap, and
+  ~11 KB of flash for this single-function-code use case.
 */
 
 #include <SPI.h>
 #include <Ethernet.h>
 #include "constants.h"
 
-// Set to 0 to strip debug prints AND Serial itself (saves ~150 B RAM)
-#define DEBUG_SERIAL 0
+#define DEBUG_SERIAL 0   // set to 1 to print readings (also pulls in Serial, ~150 B RAM)
+#define USE_STATIC_IP 1  // set to 0 for DHCP (DHCP uses ~150 B more RAM & ~3 KB flash)
 
-// Set to 1 to use a static IP instead of DHCP (saves ~150 B RAM & 3 KB flash)
-#define USE_STATIC_IP 1
 #if USE_STATIC_IP
 IPAddress staticIP(192, 168, 0, 177); // match the PLC subnet
 #endif
 
 EthernetServer ethServer(MODBUS_PORT);
 
-// Holding registers served to the PLC (see register map in constants.h)
+// Holding registers served to the PLC (see the register map in constants.h).
 uint16_t holdingRegs[NUM_HOLDING_REGS] = { 0 };
 
 const uint8_t NUM_CHANNELS = 2;
 const uint8_t ANALOG_PINS[NUM_CHANNELS] = { PRESSURE_PIN, DP_PIN };
 
-// Average filter to smooth noise, one buffer per channel
-// Only using integers instead of floats for efficiency
-
+// Moving-average filter to smooth ADC noise, one ring buffer per channel.
 const uint8_t NUM_SAMPLES = 8;
 uint16_t samples[NUM_CHANNELS][NUM_SAMPLES];
-uint16_t sampleSum[NUM_CHANNELS];   // running totals to avoid re-summing the arrays
+uint16_t sampleSum[NUM_CHANNELS];   // running totals, so we never re-sum the arrays
 uint8_t  sampleIndex[NUM_CHANNELS];
 uint8_t  sampleCount[NUM_CHANNELS]; // grows to NUM_SAMPLES during warm-up, then sticks
 
@@ -58,13 +63,12 @@ void setup() {
     sampleCount[ch] = 0;
   }
 
-  Ethernet.init(10);
+  Ethernet.init(10); // CS pin for most W5x00 shields
 #if USE_STATIC_IP
-  Ethernet.begin(mac, staticIP); // Static IP
+  Ethernet.begin(mac, staticIP);
 #else
-  Ethernet.begin(mac); // DHCP
+  Ethernet.begin(mac);
 #endif
-
   ethServer.begin();
 
 #if DEBUG_SERIAL
@@ -73,32 +77,26 @@ void setup() {
 #endif
 }
 
-// Updates the running sum for one channel and returns the filtered raw reading
+// Updates the running sum for one channel and returns the filtered raw reading.
 uint16_t readFilteredRaw(uint8_t ch) {
   uint16_t raw = analogRead(ANALOG_PINS[ch]);
-
   sampleSum[ch] -= samples[ch][sampleIndex[ch]]; // drop the sample being overwritten
   samples[ch][sampleIndex[ch]] = raw;
   sampleSum[ch] += raw;
-
   if (++sampleIndex[ch] >= NUM_SAMPLES) sampleIndex[ch] = 0;
   if (sampleCount[ch] < NUM_SAMPLES) sampleCount[ch]++;
-
-  return sampleSum[ch] / sampleCount[ch]; // count >= 1 after first call
+  return sampleSum[ch] / sampleCount[ch]; // count >= 1 after the first call
 }
 
 void updateHoldingRegisters() {
   for (uint8_t ch = 0; ch < NUM_CHANNELS; ch++) {
-    uint16_t avgRaw = readFilteredRaw(ch); // 10 bits
-
-    // current_mA * 100 = avgRaw * VREF_MV * 100 / (ADC_MAX * SHUNT_OHMS)
+    uint16_t avgRaw = readFilteredRaw(ch);
+    // current(mA) * 100 = avgRaw * VREF_MV * 100 / (ADC_MAX * SHUNT_OHMS)
     uint32_t centiMA = ((uint32_t)avgRaw * VREF_MV * 100UL) / ((uint32_t)ADC_MAX * SHUNT_OHMS);
-
     holdingRegs[ch] = constrain((uint16_t)centiMA, CURRENT_MIN_MA * 100, CURRENT_MAX_MA * 100);
-
 #if DEBUG_SERIAL
     uint16_t whole = holdingRegs[ch] / 100;
-    uint16_t frac = holdingRegs[ch] % 100;
+    uint16_t frac  = holdingRegs[ch] % 100;
     Serial.print(ch == 0 ? F("Pressure: ") : F("Diff pressure: "));
     Serial.print(whole);
     Serial.print(F("."));
@@ -113,47 +111,41 @@ void updateHoldingRegisters() {
 }
 
 /*
-Minimal Modbus TCP responder.
-
-Request frame (MBAP header + PDU):
-  [0-1] transaction ID   (echoed back)
-  [2-3] protocol ID      (0)
-  [4-5] length           (bytes remaining after this field, including unit ID)
-  [6]   unit ID          (echoed back)
-  [7]   function code
-  [8-9] start address    (FC03)
-  [10-11] register count (FC03)
-
-Returns false if the connection should be dropped.
+  Minimal Modbus TCP responder, handled inline.
+  This is the exact logic the ModbusResponder library packages into
+  serve(). Reads one request, replies to FC03, returns false to drop
+  the connection on any framing error.
 */
-bool serveModbusRequest(EthernetClient &client) {
+bool serveModbusRequest(EthernetClient& client) {
   uint8_t buf[9 + 2 * NUM_HOLDING_REGS];
 
+  // --- Read the 7-byte MBAP header ---
   if (client.readBytes(buf, 7) != 7) return false;
 
   uint16_t protoId = ((uint16_t)buf[2] << 8) | buf[3];
   uint16_t length  = ((uint16_t)buf[4] << 8) | buf[5];
   if (protoId != 0 || length < 2 || length > 255) return false;
 
+  // --- Read the PDU (length already counts the 1-byte unit ID we read) ---
   uint8_t pduLen = length - 1;
-  const uint8_t maxPduCapacity = sizeof(buf) - 7; // tie the cap to real buffer size, not a magic number
+  const uint8_t maxPduCapacity = sizeof(buf) - 7; // tie the cap to the real buffer size
   uint8_t toRead = pduLen > maxPduCapacity ? maxPduCapacity : pduLen;
   if (client.readBytes(buf + 7, toRead) != toRead) return false;
   for (uint8_t i = toRead; i < pduLen; i++) {
-    if (client.read() < 0) return false;
+    if (client.read() < 0) return false; // drain any excess so the stream stays in sync
   }
 
   uint8_t fc = buf[7];
-  uint8_t pduLenResp; // FC + payload, NOT including unit ID
+  uint8_t pduLenResp; // function code + payload, NOT including the unit ID
 
   if (fc == 0x03 && pduLen == 5) {
     uint16_t addr = ((uint16_t)buf[8] << 8) | buf[9];
     uint16_t qty  = ((uint16_t)buf[10] << 8) | buf[11];
 
     if (qty == 0 || addr < HOLDING_REG_ADDR ||
-        (uint32_t)addr + qty > HOLDING_REG_ADDR + NUM_HOLDING_REGS) {
+        (uint32_t)addr + qty > (uint32_t)HOLDING_REG_ADDR + NUM_HOLDING_REGS) {
       buf[7] = fc | 0x80;
-      buf[8] = 0x02;
+      buf[8] = 0x02; // exception: illegal data address
       pduLenResp = 2;
     } else {
       buf[8] = qty * 2;
@@ -167,14 +159,15 @@ bool serveModbusRequest(EthernetClient &client) {
     }
   } else {
     buf[7] = fc | 0x80;
-    buf[8] = 0x01;
+    buf[8] = 0x01; // exception: illegal function
     pduLenResp = 2;
   }
 
+  // --- Patch the MBAP length and send the reply ---
   uint16_t mbapLength = pduLenResp + 1; // +1 for the unit ID byte
   buf[4] = mbapLength >> 8;
   buf[5] = mbapLength & 0xFF;
-  client.write(buf, 7 + pduLenResp); // full MBAP(7) + PDU
+  client.write(buf, 7 + pduLenResp); // full MBAP header (7) + PDU
   return true;
 }
 
@@ -187,12 +180,11 @@ void loop() {
     Serial.println(F("PLC connected"));
 #endif
     while (client.connected()) {
-      updateHoldingRegisters(); // keeps registers updated w/fresh readings
+      updateHoldingRegisters(); // keep registers fresh while the PLC polls
       if (client.available()) {
         if (!serveModbusRequest(client)) {
           client.stop();
           break;
-          delay(0); // Serial spam control
         }
       }
     }
@@ -201,5 +193,5 @@ void loop() {
 #endif
   }
 
-  delay(50); // Less Serial spam
+  delay(50);
 }
