@@ -1,6 +1,6 @@
 /*
   Pressure Reader - example for ArduinoRemoteIO
-  JLab SRGS Cryogenics Project
+  based on JLab SRGS Cryogenics Project
 
   Reads 4-20mA current loop signals from 24V transducers. Each loop
   drops across its own 250-ohm shunt; the ADC reads the shunt voltage
