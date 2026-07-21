@@ -82,9 +82,13 @@ buffer is sized at your include site.
 - **[BasicHoldingRegisters](examples/BasicHoldingRegisters)** — the smallest
   possible sketch: serves two registers with demo values over Ethernet. Start
   here to learn the API.
-- **[PressureTransducer](examples/PressureTransducer)** — a real deployment:
-  two 4-20mA pressure transducers read via ADC + shunt resistor, filtered, and
-  served as holding registers to a cryogenics PLC.
+- **[example_transducer](examples/example_transducer)** — a real deployment
+  using the library: two 4-20mA pressure transducers read via ADC + shunt
+  resistor, filtered, and served as holding registers to a cryogenics PLC.
+- **[real_transducer](examples/real_transducer)** — the original, hand-rolled
+  version this library was distilled from. It handles the Modbus framing and
+  FC03 reply *inline*, without the library, so you can see exactly what
+  `ModbusResponder::serve()` does internally.
 
 ## Scope and limitations
 
