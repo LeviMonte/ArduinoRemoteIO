@@ -1,0 +1,7 @@
+# Syntax coloring map for ModbusResponder
+# KEYWORD1 = classes/datatypes, KEYWORD2 = methods, LITERAL1 = constants
+# Columns must be separated by a single TAB.
+
+ModbusResponder	KEYWORD1
+serve	KEYWORD2
+MODBUS_MAX_REGS	LITERAL1
