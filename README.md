@@ -1,46 +1,106 @@
-# ArduinoRemoteIO
+# ModbusResponder
 
-A minimal Modbus TCP responder for Arduino, built to serve sensor/IO data
-as holding registers to a PLC (tested against Allen Bradley PLCs) without the RAM and flash overhead of a full Modbus library.
+A minimal, dependency-free **Modbus TCP responder** for Arduino. It serves
+sensor/IO data as **holding registers** to a PLC or SCADA master using a single
+Modbus function code — Read Holding Registers (FC03) — without the RAM and flash
+overhead of a full Modbus library.
 
-## Advantages over ArduinoModbus
+Originally built for an Allen-Bradley PLC integration on the JLab SRGS
+cryogenics project, where every byte of SRAM on an AVR board mattered.
 
-[ArduinoModbus](https://github.com/arduino-libraries/ArduinoModbus)
-(LGPL-2.1, Copyright (c) 2018 Arduino SA) is a solid choice for most
-Modbus projects as it supports multiple function codes and both RS485
-and TCP. This project only ever needs one thing: Read Holding Registers
-(FC03) served over TCP. On boards with very limited SRAM (like an Arduino nano/uno/etc.),
-the full library's overhead (~700 B static RAM, ~300 B runtime heap, ~11 KB flash
-in early testing here) wasn't worth carrying for that single code path,
-so `ModbusResponder` implements just FC03 directly against the public
-Modbus Application Protocol spec. It's a trade-off, but not necessarily a strict
-improvement as you give up the library's flexibility for a smaller,
-purpose-built footprint.
+- **Header-only** — nothing to compile separately, no dependencies beyond the
+  Arduino core.
+- **Transport-agnostic** — works with any object implementing the Arduino
+  `Client` interface (Ethernet, WiFi, etc.).
+- **You own the data** — the responder reads from a register array that your
+  sketch fills however it likes (ADC reads, calculations, other sensors).
 
-## Protocol reference
-- Modbus Application Protocol V1.1b3 — https://www.modbus.org/specs.php
-- MBAP framing + FC03 implemented in `src/ModbusResponder.cpp`
+## Installation
 
-## Core API
+**Library Manager (recommended):** in the Arduino IDE, open
+**Sketch → Include Library → Manage Libraries…**, search for `ModbusResponder`,
+and click **Install**.
+
+**Manual:** download this repository as a ZIP and use
+**Sketch → Include Library → Add .ZIP Library…**.
+
+## Quick start
 
 ```cpp
-#define MODBUS_MAX_REGS 2       // size the buffer for your project
+#define MODBUS_MAX_REGS 2        // size the buffer for your project
 #include <ModbusResponder.h>
 
 uint16_t holdingRegs[MODBUS_MAX_REGS] = { 0 };
 ModbusResponder responder(holdingRegs, MODBUS_MAX_REGS, /* baseAddr */ 0);
 
-// per client, per loop:
-responder.serve(client);
+// In your loop, when a client has data available:
+responder.serve(client);         // client is any Arduino Client (e.g. EthernetClient)
 ```
 
-`ModbusResponder` doesn't know or care where register values come from:
-your sketch owns the array and updates it however it needs to (ADC reads,
-calculations, etc.). This is what makes it reusable across
-1-channel, 2-channel, or N-channel projects: only `MODBUS_MAX_REGS` and
-your own update loop change.
+`ModbusResponder` doesn't know or care where register values come from: your
+sketch owns the array and updates it however it needs to. This is what makes it
+reusable across 1-channel, 2-channel, or N-channel projects — only
+`MODBUS_MAX_REGS` and your own update loop change.
+
+## API
+
+```cpp
+ModbusResponder(uint16_t* regs, uint16_t regCount, uint16_t regBaseAddr);
+```
+
+| Parameter     | Meaning                                                        |
+|---------------|----------------------------------------------------------------|
+| `regs`        | Pointer to your holding-register array (you own and update it). |
+| `regCount`    | Number of registers in that array (clamped to `MODBUS_MAX_REGS`). |
+| `regBaseAddr` | Modbus address that `regs[0]` corresponds to.                   |
+
+```cpp
+bool serve(Client& client);
+```
+
+Handle one request from a connected client. Call it once per loop iteration when
+the client has data available. Returns `false` if the connection should be
+dropped (framing error, short read, or closed socket).
+
+### Sizing the buffer
+
+Define `MODBUS_MAX_REGS` **before** including the header to size the internal I/O
+buffer. It defaults to `125` (the FC03 spec maximum) if left undefined, which
+reserves more RAM than most projects need — so set it to your channel count:
+
+```cpp
+#define MODBUS_MAX_REGS 2
+#include <ModbusResponder.h>
+```
+
+Because a `#define` in your sketch can only reach code in a header (not a
+separately compiled `.cpp`), this library is intentionally header-only so the
+buffer is sized at your include site.
 
 ## Examples
-- [`examples/pressure_transducer`](examples/pressure_transducer) —
-  two 4-20mA pressure transducers read via ADC + shunt resistor, served
-  as holding registers, built for a JLab cryogenics PLC integration.
+
+- **[BasicHoldingRegisters](examples/BasicHoldingRegisters)** — the smallest
+  possible sketch: serves two registers with demo values over Ethernet. Start
+  here to learn the API.
+- **[PressureTransducer](examples/PressureTransducer)** — a real deployment:
+  two 4-20mA pressure transducers read via ADC + shunt resistor, filtered, and
+  served as holding registers to a cryogenics PLC.
+
+## Scope and limitations
+
+This library implements only **Read Holding Registers (FC03) over Modbus TCP**.
+Any other function code returns an "illegal function" exception (0x01), and
+out-of-range requests return "illegal data address" (0x02). If you need write
+support, multiple function codes, or Modbus RTU/RS-485, use the fuller-featured
+[ArduinoModbus](https://github.com/arduino-libraries/ArduinoModbus) library
+instead. This project deliberately trades that flexibility for a tiny footprint.
+
+## Protocol reference
+
+- Modbus Application Protocol V1.1b3 — https://www.modbus.org/specs.php
+- MBAP framing + FC03 are implemented inline in
+  [`src/ModbusResponder.h`](src/ModbusResponder.h).
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE).
