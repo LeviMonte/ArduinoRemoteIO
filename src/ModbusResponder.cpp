@@ -5,20 +5,8 @@ ModbusResponder::ModbusResponder(uint16_t* regs, uint16_t regCount, uint16_t reg
 {
 }
 
-/*
-Request frame (MBAP header + PDU):
-  [0-1] transaction ID   (echoed back)
-  [2-3] protocol ID      (0)
-  [4-5] length           (bytes remaining after this field, including unit ID)
-  [6]   unit ID          (echoed back)
-  [7]   function code
-  [8-9] start address    (FC03)
-  [10-11] register count (FC03)
-
-Returns false if the connection should be dropped.
-*/
 bool ModbusResponder::serve(Client& client) {
-  uint8_t buf[9 + 2 * 125]; // 125 regs = max qty a single FC03 response can carry per spec
+  uint8_t buf[9 + 2 * MODBUS_MAX_REGS]; // sized off your MODBUS_MAX_REGS, not the spec max
 
   if (client.readBytes(buf, 7) != 7) return false;
 
