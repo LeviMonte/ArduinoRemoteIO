@@ -5,8 +5,8 @@ sensor/IO data as **holding registers** to a PLC or SCADA master using a single
 Modbus function code — Read Holding Registers (FC03) — without the RAM and flash
 overhead of a full Modbus library.
 
-Originally built for an Allen-Bradley PLC integration on the JLab SRGS
-cryogenics project, where every byte of SRAM on an AVR board mattered.
+Originally built for an Allen-Bradley PLC integration on my JLab SRGS
+project, where every byte (2048 total) of SRAM on an AVR board mattered.
 
 - **Header-only** — nothing to compile separately, no dependencies beyond the
   Arduino core.
