@@ -41,6 +41,6 @@ calculations, etc.). This is what makes it reusable across
 your own update loop change.
 
 ## Examples
-- [`examples/pressure_transducer_4_20mA`](examples/pressure_transducer) —
+- [`examples/pressure_transducer`](examples/pressure_transducer) —
   two 4-20mA pressure transducers read via ADC + shunt resistor, served
   as holding registers, built for a JLab cryogenics PLC integration.
