@@ -3,7 +3,7 @@
 A minimal Modbus TCP responder for Arduino, built to serve sensor/IO data
 as holding registers to a PLC (tested against Allen Bradley PLCs) without the RAM and flash overhead of a full Modbus library.
 
-## Why not just use ArduinoModbus?
+## Advantages over ArduinoModbus
 
 [ArduinoModbus](https://github.com/arduino-libraries/ArduinoModbus)
 (LGPL-2.1, Copyright (c) 2018 Arduino SA) is a solid choice for most
